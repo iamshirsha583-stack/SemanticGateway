@@ -608,6 +608,9 @@
             document.getElementById('decision-status').innerText = `Routed (${latency || '11.8'}ms)`;
         }
 
+        // Backend API Base URL
+        const API_BASE_URL = 'https://semanticgateway-2.onrender.com';
+
         // Execute Prompt via Gateway API
         async function executeRoute() {
             const promptInput = document.getElementById('prompt-input');
@@ -634,7 +637,7 @@
             const startTime = performance.now();
 
             try {
-                const response = await fetch('/v1/chat/completions', {
+                const response = await fetch(`${API_BASE_URL}/v1/chat/completions`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -709,7 +712,7 @@
         // Fetch Live Stats from Backend
         async function fetchTelemetry() {
             try {
-                const res = await fetch('/api/telemetry');
+                const res = await fetch(`${API_BASE_URL}/api/telemetry`);
                 if (res.ok) {
                     const data = await res.json();
                     if (data.total_requests !== undefined && data.total_requests > 0) {
@@ -735,7 +738,7 @@
         // Fetch System Health
         async function fetchHealth() {
             try {
-                const res = await fetch('/health');
+                const res = await fetch(`${API_BASE_URL}/health`);
                 if (res.ok) {
                     const health = await res.json();
                     if (health.embedding_model) {
