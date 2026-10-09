@@ -1,13 +1,10 @@
 {
   "version": 2,
-  "rewrites": [
+  "cleanUrls": true,
+  "routes": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/static/$1"
+      "src": "/(.*)",
+      "dest": "/static/$1"
     }
   ]
 }
