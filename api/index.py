@@ -6,7 +6,6 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 sys.path.insert(0, str(ROOT_DIR / "semantic_gateway"))
-sys.path.insert(0, str(ROOT_DIR / "Semantic Gateway" / "semantic_gateway"))
 
 # Import FastAPI application instance
 try:
