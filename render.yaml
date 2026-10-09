@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: semantic-gateway
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 2 -k uvicorn.workers.UvicornWorker semantic_gateway.app.main:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "8000"
+      - key: ROUTES_FILE
+        value: routes.yaml
+      - key: EMBEDDING_MODEL_NAME
+        value: sentence-transformers/all-MiniLM-L6-v2
+      - key: SIMILARITY_THRESHOLD
+        value: "0.45"
+      - key: FAST_MODEL_NAME
+        value: gemma2:2b
+      - key: FAST_MODEL_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: FAST_MODEL_API_KEY
+        sync: false
+      - key: DEEP_MODEL_NAME
+        value: llama-3.3-70b-versatile
+      - key: DEEP_MODEL_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: DEEP_MODEL_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
