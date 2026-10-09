@@ -35,6 +35,3 @@ dev = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["semantic_gateway", "."]
-
-[tool.vercel]
-entrypoint = "semantic_gateway.app.main:app"
