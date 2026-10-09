@@ -2,8 +2,12 @@ import time
 import threading
 from collections import deque
 from typing import Deque, List, Dict, Any, Optional
-from app.router.models import MetricSummary
-from app.config import Settings, get_settings
+try:
+    from app.router.models import MetricSummary
+    from app.config import Settings, get_settings
+except (ImportError, ModuleNotFoundError):
+    from semantic_gateway.app.router.models import MetricSummary
+    from semantic_gateway.app.config import Settings, get_settings
 
 _default_tracker: Optional["TelemetryTracker"] = None
 

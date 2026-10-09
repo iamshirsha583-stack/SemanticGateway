@@ -8,8 +8,12 @@ import numpy as np
 import yaml
 import httpx
 
-from app.config import Settings
-from app.router.models import RouteDecision, RouteDefinition
+try:
+    from app.config import Settings
+    from app.router.models import RouteDecision, RouteDefinition
+except (ImportError, ModuleNotFoundError):
+    from semantic_gateway.app.config import Settings
+    from semantic_gateway.app.router.models import RouteDecision, RouteDefinition
 
 
 class SemanticEngine:

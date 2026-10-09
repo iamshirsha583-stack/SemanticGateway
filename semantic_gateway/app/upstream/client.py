@@ -3,9 +3,14 @@ from typing import AsyncGenerator, Dict, Any, Tuple, Optional
 import httpx
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi import HTTPException
-from app.router.models import ChatCompletionRequest, RouteDecision
-from app.telemetry.tracker import TelemetryTracker
-from app.config import Settings, get_settings
+try:
+    from app.router.models import ChatCompletionRequest, RouteDecision
+    from app.telemetry.tracker import TelemetryTracker
+    from app.config import Settings, get_settings
+except (ImportError, ModuleNotFoundError):
+    from semantic_gateway.app.router.models import ChatCompletionRequest, RouteDecision
+    from semantic_gateway.app.telemetry.tracker import TelemetryTracker
+    from semantic_gateway.app.config import Settings, get_settings
 
 
 def is_valid_api_key(key: str) -> bool:
