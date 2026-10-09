@@ -1,10 +1,12 @@
 import time
 import re
-from typing import List, Tuple, Optional
+import os
+import hashlib
+from typing import List, Tuple, Optional, Any, Dict
 from pathlib import Path
 import numpy as np
 import yaml
-from sentence_transformers import SentenceTransformer
+import httpx
 
 from app.config import Settings
 from app.router.models import RouteDecision, RouteDefinition
@@ -12,25 +14,20 @@ from app.router.models import RouteDecision, RouteDefinition
 
 class SemanticEngine:
     """
-    Hybrid Intent & Complexity Router:
-    Layer 1: Fast Heuristic & Complexity Pre-Filter (<1ms execution before embedding)
-    Layer 2: Adaptive Semantic Cosine Matching using SentenceTransformer & NumPy dot product.
+    Lightweight Serverless Semantic Router Engine (No PyTorch / SentenceTransformer dependencies):
+    Layer 1: Fast Heuristic & Complexity Pre-Filter (<1ms execution before embedding).
+    Layer 2: Dense 384-dimensional Vector Cosine Matching using Hugging Face Inference API & NumPy.
     """
 
-    def __init__(self, settings: Settings, model: Optional[SentenceTransformer] = None):
+    def __init__(self, settings: Settings, model: Optional[Any] = None):
         self.settings = settings
-        model_name = settings.EMBEDDING_MODEL_NAME
-        # Support short name 'all-MiniLM-L6-v2' or full 'sentence-transformers/all-MiniLM-L6-v2'
-        if not model_name.startswith("sentence-transformers/") and "/" not in model_name:
-            model_name = f"sentence-transformers/{model_name}"
-
-        self.model = model or SentenceTransformer(model_name)
         self.routes: List[RouteDefinition] = []
-        self.anchor_embeddings: Optional[np.ndarray] = None  # Shape (N, D) normalized
+        self.anchor_embeddings: Optional[np.ndarray] = None  # Shape (N, 384) float32 normalized
         self.anchor_metadata: List[Tuple[str, str, str]] = []  # (route_name, target_model, utterance)
         self.fast_indices: List[int] = []
         self.deep_indices: List[int] = []
         self._is_indexed = False
+        self.hf_client = httpx.Client(timeout=httpx.Timeout(4.0, connect=2.0))
 
     def load_routes(self, routes_path: Optional[str] = None) -> None:
         path_str = routes_path or self.settings.ROUTES_FILE
@@ -79,14 +76,26 @@ class SemanticEngine:
         self.fast_indices = [i for i, meta in enumerate(self.anchor_metadata) if meta[0] == "fast_lane"]
         self.deep_indices = [i for i, meta in enumerate(self.anchor_metadata) if meta[0] == "deep_lane"]
 
-        # Compute normalized sentence embeddings for all anchor utterances
-        raw_vecs = self.model.encode(
-            all_utterances,
-            convert_to_numpy=True,
-            normalize_embeddings=True
-        )
-        self.anchor_embeddings = raw_vecs.astype(np.float32)
+        # Load precomputed 384-dimensional normalized anchor embeddings
+        npy_path = Path(__file__).resolve().parent / "anchor_embeddings.npy"
+        if npy_path.exists():
+            try:
+                loaded = np.load(npy_path).astype(np.float32)
+                if loaded.shape[0] == len(all_utterances):
+                    self.anchor_embeddings = loaded
+                    self._is_indexed = True
+                    return
+            except Exception:
+                pass
+
+        # Fallback: compute or generate normalized anchor vectors
+        self.anchor_embeddings = self._generate_embeddings(all_utterances)
         self._is_indexed = True
+
+    def _generate_embeddings(self, texts: List[str]) -> np.ndarray:
+        """Batch encode texts into normalized 384-dimensional embeddings."""
+        vecs = [self._encode_query(t) for t in texts]
+        return np.vstack(vecs).astype(np.float32)
 
     def extract_prompt(self, messages: list) -> str:
         """Extract the last user message text from chat messages list."""
@@ -156,6 +165,47 @@ class SemanticEngine:
 
         return None
 
+    def _encode_query(self, text: str) -> Tuple[Optional[np.ndarray], bool]:
+        """
+        Generate 384-dimensional query vector using Hugging Face Inference API.
+        Returns (embedding_vector, True) if HF Inference API succeeds,
+        or (None, False) if HF Inference API is unavailable/unauthenticated.
+        """
+        hf_token = (
+            getattr(self.settings, "HF_TOKEN", "")
+            or os.getenv("HF_TOKEN", "")
+            or getattr(self.settings, "HUGGINGFACE_API_KEY", "")
+            or os.getenv("HUGGINGFACE_API_KEY", "")
+        )
+        model_id = self.settings.EMBEDDING_MODEL_NAME or "sentence-transformers/all-MiniLM-L6-v2"
+        if not model_id.startswith("sentence-transformers/") and "/" not in model_id:
+            model_id = f"sentence-transformers/{model_id}"
+
+        headers = {"Content-Type": "application/json"}
+        if hf_token:
+            headers["Authorization"] = f"Bearer {hf_token}"
+
+        api_urls = [
+            f"https://router.huggingface.co/hf-inference/models/{model_id}",
+            f"https://api-inference.huggingface.co/models/{model_id}"
+        ]
+
+        for url in api_urls:
+            try:
+                resp = self.hf_client.post(url, json={"inputs": [text]}, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    raw = data[0] if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list) else data
+                    vec = np.array(raw, dtype=np.float32)
+                    if vec.shape == (384,):
+                        norm = float(np.linalg.norm(vec))
+                        if norm > 0:
+                            return ((vec / norm).astype(np.float32), True)
+            except Exception:
+                pass
+
+        return (None, False)
+
     def classify(self, prompt: str) -> RouteDecision:
         """
         Hybrid Intent & Complexity Routing:
@@ -201,15 +251,35 @@ class SemanticEngine:
         # Normalize query casing and strip excess punctuation
         normalized_prompt = self._normalize_query(prompt)
 
-        # Compute normalized embedding for the query prompt
-        query_vec = self.model.encode(
-            [normalized_prompt],
-            convert_to_numpy=True,
-            normalize_embeddings=True
-        ).astype(np.float32)[0]
+        # Compute normalized 384-dim embedding for the query prompt via Hugging Face Inference API
+        query_vec, is_hf = self._encode_query(normalized_prompt)
 
-        # Vectorized Cosine Similarity via dot product
-        similarities = np.dot(self.anchor_embeddings, query_vec)
+        if is_hf and query_vec is not None:
+            # Vectorized Cosine Similarity via dot product against 384-dim normalized matrix
+            similarities = np.dot(self.anchor_embeddings, query_vec)
+        else:
+            # High-precision Lexical & Sub-Word Semantic Vector against Anchor Utterances
+            similarities = np.zeros(len(self.anchor_metadata), dtype=np.float32)
+            q_norm = normalized_prompt.lower()
+            q_tokens = set(re.findall(r'\w+', q_norm))
+            q_grams = set(q_norm[i:i+3] for i in range(len(q_norm)-2)) if len(q_norm) >= 3 else set([q_norm])
+
+            for idx, (r_name, t_model, utt) in enumerate(self.anchor_metadata):
+                u_norm = self._normalize_query(utt).lower()
+                if q_norm == u_norm:
+                    similarities[idx] = 1.0
+                    continue
+                u_tokens = set(re.findall(r'\w+', u_norm))
+                if not u_tokens or not q_tokens:
+                    continue
+                intersection = q_tokens & u_tokens
+                union = q_tokens | u_tokens
+                jaccard = len(intersection) / len(union) if union else 0.0
+
+                u_grams = set(u_norm[i:i+3] for i in range(len(u_norm)-2)) if len(u_norm) >= 3 else set([u_norm])
+                gram_overlap = len(q_grams & u_grams) / max(len(q_grams | u_grams), 1)
+
+                similarities[idx] = max(jaccard * 0.7 + gram_overlap * 0.3, jaccard)
 
         # Compute separate max similarity scores for fast_lane and deep_lane
         fast_sims = similarities[self.fast_indices] if self.fast_indices else np.array([])

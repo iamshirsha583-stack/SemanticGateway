@@ -1,11 +1,10 @@
 from contextlib import asynccontextmanager
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sentence_transformers import SentenceTransformer
 
 from app.config import Settings, get_settings
 from app.router.models import ChatCompletionRequest, RouteDecision, MetricSummary
@@ -14,46 +13,62 @@ from app.upstream.client import UpstreamClient
 from app.telemetry.tracker import TelemetryTracker
 
 # Shared runtime singletons
-engine: SemanticEngine = None
-upstream_client: UpstreamClient = None
-telemetry_tracker: TelemetryTracker = None
+engine: Optional[SemanticEngine] = None
+upstream_client: Optional[UpstreamClient] = None
+telemetry_tracker: Optional[TelemetryTracker] = None
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def get_tracker() -> TelemetryTracker:
+    global telemetry_tracker
+    if telemetry_tracker is None:
+        telemetry_tracker = TelemetryTracker(settings=get_settings())
+    return telemetry_tracker
+
+
+def get_engine() -> SemanticEngine:
+    global engine
+    if engine is None:
+        engine = SemanticEngine(settings=get_settings())
+        engine.load_routes()
+    return engine
+
+
+def get_client() -> UpstreamClient:
+    global upstream_client
+    if upstream_client is None:
+        upstream_client = UpstreamClient(tracker=get_tracker(), settings=get_settings())
+    return upstream_client
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI Lifespan manager: Pre-loads sentence transformer & computes vector index during startup."""
+    """FastAPI Lifespan manager: Initializes router engine & pre-computed vector index during startup."""
     global engine, upstream_client, telemetry_tracker
 
     settings = get_settings()
     telemetry_tracker = TelemetryTracker(settings=settings)
     upstream_client = UpstreamClient(tracker=telemetry_tracker, settings=settings)
 
-    print(f"[SemanticRouter] Initializing SentenceTransformer model '{settings.EMBEDDING_MODEL_NAME}'...")
-    model_name = settings.EMBEDDING_MODEL_NAME
-    if not model_name.startswith("sentence-transformers/") and "/" not in model_name:
-        model_name = f"sentence-transformers/{model_name}"
-
-    st_model = SentenceTransformer(model_name)
-
-    engine = SemanticEngine(settings=settings, model=st_model)
-    print(f"[SemanticRouter] Loading route definitions from '{settings.ROUTES_FILE}'...")
+    print(f"[SemanticGateway] Initializing SemanticEngine with '{settings.EMBEDDING_MODEL_NAME}'...")
+    engine = SemanticEngine(settings=settings)
     engine.load_routes()
-    print(f"[SemanticRouter] Route index built with {len(engine.anchor_metadata)} anchor utterances. Ready!")
+    print(f"[SemanticGateway] Route index built with {len(engine.anchor_metadata)} anchor utterances. Ready!")
 
     yield
 
     # Server shutdown
-    print("[SemanticRouter] Closing upstream client HTTP connections...")
-    await upstream_client.close()
+    if upstream_client:
+        print("[SemanticGateway] Closing upstream client HTTP connections...")
+        await upstream_client.close()
 
 
 app = FastAPI(
     title="Semantic Gateway",
-    description="High-performance, cost-optimizing LLM proxy gateway with local sentence embedding routing",
+    description="High-performance, cost-optimizing LLM proxy gateway with dense sentence embedding routing",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -68,13 +83,14 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# Mount static files if directory exists
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():
-    """Serve the modern SemanticRouter Web Dashboard."""
+    """Serve the modern Semantic Gateway Web Dashboard."""
     index_file = STATIC_DIR / "index.html"
     if not index_file.exists():
         cwd_index = Path("static/index.html")
@@ -87,11 +103,11 @@ async def serve_dashboard():
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>SemanticRouter Gateway</title>
+    <title>Semantic Gateway</title>
     <style>body { background: #090d16; color: #f3f4f6; font-family: sans-serif; padding: 2rem; }</style>
 </head>
 <body>
-    <h1>⚡ SemanticRouter Gateway</h1>
+    <h1>⚡ Semantic Gateway</h1>
     <p>Static dashboard file not found at <code>static/index.html</code>.</p>
 </body>
 </html>""",
@@ -99,25 +115,8 @@ async def serve_dashboard():
     )
 
 
-def get_engine() -> SemanticEngine:
-    if engine is None:
-        raise HTTPException(status_code=503, detail="Router engine not initialized")
-    return engine
-
-
-def get_client() -> UpstreamClient:
-    if upstream_client is None:
-        raise HTTPException(status_code=503, detail="Upstream client not initialized")
-    return upstream_client
-
-
-def get_tracker() -> TelemetryTracker:
-    if telemetry_tracker is None:
-        raise HTTPException(status_code=503, detail="Telemetry tracker not initialized")
-    return telemetry_tracker
-
-
 @app.get("/health")
+@app.get("/api/health")
 async def health_check(
     router_engine: SemanticEngine = Depends(get_engine),
     settings: Settings = Depends(get_settings),
@@ -133,6 +132,7 @@ async def health_check(
 
 
 @app.get("/metrics", response_model=MetricSummary)
+@app.get("/api/metrics", response_model=MetricSummary)
 @app.get("/telemetry/metrics", response_model=MetricSummary)
 async def get_metrics(tracker: TelemetryTracker = Depends(get_tracker)):
     """Telemetry metrics endpoint: latency, fast vs deep lane ratio, cumulative USD savings."""
@@ -140,6 +140,7 @@ async def get_metrics(tracker: TelemetryTracker = Depends(get_tracker)):
 
 
 @app.get("/api/telemetry")
+@app.get("/telemetry")
 async def get_telemetry_analytics(tracker: TelemetryTracker = Depends(get_tracker)):
     """
     Aggregate telemetry analytics endpoint returning live stats and last 15 routed items.
@@ -148,6 +149,7 @@ async def get_telemetry_analytics(tracker: TelemetryTracker = Depends(get_tracke
 
 
 @app.get("/dashboard/stats")
+@app.get("/api/dashboard/stats")
 async def get_dashboard_stats(tracker: TelemetryTracker = Depends(get_tracker)):
     """Dashboard analytics endpoint returning real-time metrics overview."""
     summary = tracker.get_summary()
@@ -165,6 +167,7 @@ async def get_dashboard_stats(tracker: TelemetryTracker = Depends(get_tracker)):
 
 
 @app.get("/v1/models")
+@app.get("/api/v1/models")
 async def list_models(settings: Settings = Depends(get_settings)):
     """OpenAI-compatible models listing endpoint."""
     return {
@@ -174,25 +177,26 @@ async def list_models(settings: Settings = Depends(get_settings)):
                 "id": settings.FAST_MODEL_NAME,
                 "object": "model",
                 "created": 1700000000,
-                "owned_by": "semantic-router-fast-lane",
+                "owned_by": "semantic-gateway-fast-lane",
             },
             {
                 "id": settings.FRONTIER_MODEL_NAME,
                 "object": "model",
                 "created": 1700000000,
-                "owned_by": "semantic-router-deep-lane",
+                "owned_by": "semantic-gateway-deep-lane",
             },
             {
                 "id": "auto",
                 "object": "model",
                 "created": 1700000000,
-                "owned_by": "semantic-router-auto",
+                "owned_by": "semantic-gateway-auto",
             },
         ],
     }
 
 
 @app.post("/v1/chat/completions")
+@app.post("/api/v1/chat/completions")
 async def chat_completions(
     request: ChatCompletionRequest,
     router_engine: SemanticEngine = Depends(get_engine),
@@ -201,7 +205,7 @@ async def chat_completions(
 ):
     """
     OpenAI-compatible chat completion proxy endpoint.
-    Intercepts user query, classifies complexity via local sentence similarity in <15ms,
+    Intercepts user query, classifies complexity in <15ms,
     and forwards request asynchronously to optimal fast_lane or deep_lane LLM target.
     Injects x-semantic-route, x-semantic-model, x-semantic-classification-ms, x-estimated-cost-saved headers.
     """
@@ -223,7 +227,7 @@ async def chat_completions(
         # Forward to target upstream LLM provider
         return await client.forward(request, decision)
     except Exception as e:
-        print(f"[SemanticRouter ERROR]: {repr(e)}")
+        print(f"[SemanticGateway ERROR]: {repr(e)}")
         error_msg = f"[Upstream Error ({type(e).__name__})]: {str(e)}"
         resp_headers = {
             "x-semantic-route": decision.target_route if decision else "deep_lane",

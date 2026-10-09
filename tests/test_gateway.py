@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
 from httpx import AsyncClient, Response as HttpxResponse, Request as HttpxRequest, ASGITransport
-from sentence_transformers import SentenceTransformer
 
 try:
     from semantic_gateway.app.config import Settings
@@ -31,12 +30,7 @@ def settings():
 
 @pytest.fixture(scope="module")
 def router_engine(settings):
-    model_name = settings.EMBEDDING_MODEL_NAME
-    if not model_name.startswith("sentence-transformers/") and "/" not in model_name:
-        model_name = f"sentence-transformers/{model_name}"
-
-    st_model = SentenceTransformer(model_name)
-    engine = SemanticEngine(settings=settings, model=st_model)
+    engine = SemanticEngine(settings=settings)
     engine.load_routes(settings.ROUTES_FILE)
     engine.classify("warmup init prompt 1")
     engine.classify("warmup init prompt 2")

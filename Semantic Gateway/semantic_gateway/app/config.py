@@ -17,9 +17,11 @@ class Settings(BaseSettings):
     PORT: int = 8000
     ROUTES_FILE: str = "routes.yaml"
 
-    # Embedding & Classification Settings
+    # Embedding & Classification Settings (Hugging Face Inference API / Local)
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     SIMILARITY_THRESHOLD: float = 0.45
+    HF_TOKEN: str = ""
+    HUGGINGFACE_API_KEY: str = ""
 
     # Fast Lane LLM Tier (Gemma 2B Fast Model)
     FAST_MODEL_NAME: str = "gemma2:2b"
