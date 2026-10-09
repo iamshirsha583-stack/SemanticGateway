@@ -2,24 +2,23 @@ import os
 import sys
 from pathlib import Path
 
-# Resolve base directories and ensure Python modules can be found in Vercel serverless environment
+# Add project root and semantic_gateway to sys.path
 ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT_DIR))
-sys.path.insert(0, str(ROOT_DIR / "semantic_gateway"))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+if str(ROOT_DIR / "semantic_gateway") not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR / "semantic_gateway"))
 
-# Import FastAPI application instance
-try:
-    from semantic_gateway.app.main import app
-except ImportError:
-    from app.main import app
+# Import FastAPI application instance directly
+from semantic_gateway.app.main import app
 
-# Export ASGI app instance for Vercel Python runtime
-# Mangum handler is also provided for AWS Lambda / serverless adapters
+# Explicit top-level FastAPI instance for Vercel Python runtime AST detection
+app = app
+
 try:
     from mangum import Mangum
     handler = Mangum(app, lifespan="auto")
 except ImportError:
     handler = app
 
-# Ensure 'app' is exposed at module level
 __all__ = ["app", "handler"]

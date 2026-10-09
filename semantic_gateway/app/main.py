@@ -1,16 +1,30 @@
+import sys
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
-from pathlib import Path
+
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import Settings, get_settings
-from app.router.models import ChatCompletionRequest, RouteDecision, MetricSummary
-from app.router.engine import SemanticEngine
-from app.upstream.client import UpstreamClient
-from app.telemetry.tracker import TelemetryTracker
+# Add package directory to sys.path so 'app.*' imports resolve cleanly in all serverless contexts
+_PKG_DIR = Path(__file__).resolve().parent.parent
+if str(_PKG_DIR) not in sys.path:
+    sys.path.insert(0, str(_PKG_DIR))
+
+try:
+    from app.config import Settings, get_settings
+    from app.router.models import ChatCompletionRequest, RouteDecision, MetricSummary
+    from app.router.engine import SemanticEngine
+    from app.upstream.client import UpstreamClient
+    from app.telemetry.tracker import TelemetryTracker
+except (ImportError, ModuleNotFoundError):
+    from semantic_gateway.app.config import Settings, get_settings
+    from semantic_gateway.app.router.models import ChatCompletionRequest, RouteDecision, MetricSummary
+    from semantic_gateway.app.router.engine import SemanticEngine
+    from semantic_gateway.app.upstream.client import UpstreamClient
+    from semantic_gateway.app.telemetry.tracker import TelemetryTracker
 
 # Shared runtime singletons
 engine: Optional[SemanticEngine] = None
