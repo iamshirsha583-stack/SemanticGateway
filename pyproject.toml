@@ -37,4 +37,4 @@ testpaths = ["tests"]
 pythonpath = ["semantic_gateway", "."]
 
 [tool.vercel]
-entrypoint = "semantic_gateway.app.main:app"
+entrypoint = "api/index.py"
